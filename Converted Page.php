@@ -4,7 +4,7 @@
  * Joomla 5.x + PHP 8.1+
  *
  * Serves games: PA3 | OH5 | WA1 | WI1 | MA2
- * Game format: Pick 5 + 1 Bonus Ball (range 01–49, shared pool)
+ * Game format: Pick 6 (no bonus ball), range 01–49
  *
  * ASSUMES UPSTREAM VARIABLES EXIST:
  * - $stateName
@@ -29,18 +29,14 @@ $user  = Factory::getUser();
 
 /**
  * --------------------------------------------------------------------------
- * Game configuration — auto-detected from target page definitions
- * Pick 5 main balls + 1 Bonus Ball, both drawn from 01–49 pool
+ * Game configuration
+ * Pick 6 — no bonus ball; all six drawn positions are main balls (01–49)
  * Games served: PA3, OH5, WA1, WI1, MA2
  * --------------------------------------------------------------------------
  */
-$gameMainCount  = 5;
-$gameMainMin    = 1;
-$gameMainMax    = 49;
-$gameHasBonus   = true;
-$gameBonusMin   = 1;
-$gameBonusMax   = 49;
-$gameBonusLabel = 'Bonus Ball';
+$gameMainCount = 6;
+$gameMainMin   = 1;
+$gameMainMax   = 49;
 
 // WI1 uses a prefixed game ID in the heatmap route
 $heatmapGameId = ((string) $gId === 'WI1') ? '101WI1' : (string) $gId;
@@ -213,6 +209,7 @@ function leFindRepeatedFromLatest(array $latestBalls, array $previousRows): arra
             trim((string) ($row['third']  ?? '')),
             trim((string) ($row['fourth'] ?? '')),
             trim((string) ($row['fifth']  ?? '')),
+            trim((string) ($row['sixth']  ?? '')),
         ];
 
         foreach ($latestBalls as $ball) {
@@ -270,8 +267,7 @@ function leGetPreviousOccurrenceDate(
     string $dbCol,
     string $gameId,
     string $drawDate,
-    string $ball,
-    bool $isBonus = false
+    string $ball
 ): ?string {
     if ($ball === '') {
         return null;
@@ -281,21 +277,17 @@ function leGetPreviousOccurrenceDate(
         ->select('MAX(' . $db->quoteName('draw_date') . ')')
         ->from($db->quoteName($dbCol))
         ->where($db->quoteName('game_id') . ' = ' . $db->quote($gameId))
-        ->where($db->quoteName('draw_date') . ' < ' . $db->quote($drawDate));
-
-    if ($isBonus) {
-        $query->where($db->quoteName('sixth') . ' = ' . $db->quote($ball));
-    } else {
-        $query->where(
+        ->where($db->quoteName('draw_date') . ' < ' . $db->quote($drawDate))
+        ->where(
             '(' .
             $db->quoteName('first')  . ' = ' . $db->quote($ball) . ' OR ' .
             $db->quoteName('second') . ' = ' . $db->quote($ball) . ' OR ' .
             $db->quoteName('third')  . ' = ' . $db->quote($ball) . ' OR ' .
             $db->quoteName('fourth') . ' = ' . $db->quote($ball) . ' OR ' .
-            $db->quoteName('fifth')  . ' = ' . $db->quote($ball) .
+            $db->quoteName('fifth')  . ' = ' . $db->quote($ball) . ' OR ' .
+            $db->quoteName('sixth')  . ' = ' . $db->quote($ball) .
             ')'
         );
-    }
 
     $db->setQuery($query);
     $result = $db->loadResult();
@@ -341,24 +333,16 @@ function leEscapeJsString(string $value): string
  * Inputs
  * --------------------------------------------------------------------------
  */
-$defaultWindowMain  = 100;
-$defaultWindowBonus = 100;
-
-$nodCurrentMain  = $defaultWindowMain;
-$nodCurrentBonus = $defaultWindowBonus;
+$defaultWindow  = 100;
+$nodCurrentMain = $defaultWindow;
 
 if ($input->getMethod() === 'POST' && Session::checkToken()) {
     if ($input->post->get('fq-search', null, 'cmd') !== null) {
-        $nodCurrentMain = (int) $input->post->get('nod', $defaultWindowMain, 'int');
-    }
-
-    if ($input->post->get('pfq-search', null, 'cmd') !== null) {
-        $nodCurrentBonus = (int) $input->post->get('pnod', $defaultWindowBonus, 'int');
+        $nodCurrentMain = (int) $input->post->get('nod', $defaultWindow, 'int');
     }
 }
 
-$nodCurrentMain  = max(10, min(700, $nodCurrentMain));
-$nodCurrentBonus = max(10, min(700, $nodCurrentBonus));
+$nodCurrentMain = max(10, min(700, $nodCurrentMain));
 
 /**
  * --------------------------------------------------------------------------
@@ -377,19 +361,15 @@ $p2 = $lr ? trim((string) ($lr['second'] ?? '')) : '';
 $p3 = $lr ? trim((string) ($lr['third']  ?? '')) : '';
 $p4 = $lr ? trim((string) ($lr['fourth'] ?? '')) : '';
 $p5 = $lr ? trim((string) ($lr['fifth']  ?? '')) : '';
-$pb = $lr ? trim((string) ($lr['sixth']  ?? '')) : '';
+$p6 = $lr ? trim((string) ($lr['sixth']  ?? '')) : '';
 
-$latestMainBalls = [$p1, $p2, $p3, $p4, $p5];
+$latestMainBalls = [$p1, $p2, $p3, $p4, $p5, $p6];
 $logo = (isset($stateAbrev, $gName)) ? leResolveLogo((string) $stateAbrev, (string) $gName) : ['exists' => false, 'url' => ''];
 
-$rowsMain  = leFetchRecentDraws($db, (string) $dbCol, (string) $gId, $nodCurrentMain);
-$rowsBonus = ($nodCurrentBonus === $nodCurrentMain) ? $rowsMain : leFetchRecentDraws($db, (string) $dbCol, (string) $gId, $nodCurrentBonus);
+$rowsMain = leFetchRecentDraws($db, (string) $dbCol, (string) $gId, $nodCurrentMain);
 
-// Main balls — first through fifth, range 01–49
+// All six positions are main balls — range 01–49
 [$mainCounts, $mainLastSeenIndex] = leInitRange($gameMainMin, $gameMainMax);
-
-// Bonus ball — sixth column only, range 01–49
-[$bonusCounts, $bonusLastSeenIndex] = leInitRange($gameBonusMin, $gameBonusMax);
 
 foreach ($rowsMain as $idx => $row) {
     $balls = [
@@ -398,6 +378,7 @@ foreach ($rowsMain as $idx => $row) {
         trim((string) ($row['third']  ?? '')),
         trim((string) ($row['fourth'] ?? '')),
         trim((string) ($row['fifth']  ?? '')),
+        trim((string) ($row['sixth']  ?? '')),
     ];
 
     foreach ($balls as $ball) {
@@ -410,20 +391,6 @@ foreach ($rowsMain as $idx => $row) {
         if ($mainLastSeenIndex[$ball] === null) {
             $mainLastSeenIndex[$ball] = (int) $idx;
         }
-    }
-}
-
-foreach ($rowsBonus as $idx => $row) {
-    $ball = trim((string) ($row['sixth'] ?? ''));
-
-    if ($ball === '' || !isset($bonusCounts[$ball])) {
-        continue;
-    }
-
-    $bonusCounts[$ball]++;
-
-    if ($bonusLastSeenIndex[$ball] === null) {
-        $bonusLastSeenIndex[$ball] = (int) $idx;
     }
 }
 
@@ -441,13 +408,6 @@ foreach ($mainChartLabels as $label) {
     $mainRecencyValues[] = (int) (($mainLastSeenIndex[$label] ?? null) === null
         ? ($nodCurrentMain + 1)
         : ((int) $mainLastSeenIndex[$label] + 1));
-}
-
-$bonusChartLabels = leBuildNaturalLabels($gameBonusMin, $gameBonusMax);
-$bonusChartValues = [];
-
-foreach ($bonusChartLabels as $label) {
-    $bonusChartValues[] = (int) ($bonusCounts[$label] ?? 0);
 }
 
 $topActiveKeys = leTopKeysByValue($mainCounts, 10, false);
@@ -480,7 +440,7 @@ $repeatedNumbers   = leFindRepeatedFromLatest($latestMainBalls, array_slice($row
 $mostActiveSummary = array_slice($topActiveKeys, 0, 3);
 $quietSummary      = array_slice($quietestKeys, 0, 3);
 
-// Window comparison — main balls only, first through fifth
+// Window comparison — all six main ball positions
 $window50  = leFetchRecentDraws($db, (string) $dbCol, (string) $gId, 50);
 $window300 = leFetchRecentDraws($db, (string) $dbCol, (string) $gId, 300);
 
@@ -488,7 +448,7 @@ $window300 = leFetchRecentDraws($db, (string) $dbCol, (string) $gId, 300);
 [$counts300, ] = leInitRange($gameMainMin, $gameMainMax);
 
 foreach ($window50 as $row) {
-    foreach (['first', 'second', 'third', 'fourth', 'fifth'] as $col) {
+    foreach (['first', 'second', 'third', 'fourth', 'fifth', 'sixth'] as $col) {
         $ball = trim((string) ($row[$col] ?? ''));
         if ($ball !== '' && isset($counts50[$ball])) {
             $counts50[$ball]++;
@@ -497,7 +457,7 @@ foreach ($window50 as $row) {
 }
 
 foreach ($window300 as $row) {
-    foreach (['first', 'second', 'third', 'fourth', 'fifth'] as $col) {
+    foreach (['first', 'second', 'third', 'fourth', 'fifth', 'sixth'] as $col) {
         $ball = trim((string) ($row[$col] ?? ''));
         if ($ball !== '' && isset($counts300[$ball])) {
             $counts300[$ball]++;
@@ -533,33 +493,20 @@ if (!empty($windowShiftOut)) {
 
 /**
  * --------------------------------------------------------------------------
- * Draw history for current draw — main balls vs bonus ball separated
+ * Draw history for current draw — all 6 main balls
  * --------------------------------------------------------------------------
  */
 $drawHistoryRows = [];
 
 if ($drawDate !== '') {
     foreach ($latestMainBalls as $ball) {
-        $prevDate = leGetPreviousOccurrenceDate($db, (string) $dbCol, (string) $gId, $drawDate, $ball, false);
+        $prevDate = leGetPreviousOccurrenceDate($db, (string) $dbCol, (string) $gId, $drawDate, $ball);
         $drawsAgo = leGetDrawingsSinceDate($db, (string) $dbCol, (string) $gId, $prevDate, $drawDate);
 
         $drawHistoryRows[] = [
             'label'    => lePad2($ball),
             'prevDate' => $prevDate,
             'drawsAgo' => $drawsAgo,
-            'isBonus'  => false,
-        ];
-    }
-
-    if ($gameHasBonus && $pb !== '') {
-        $prevBonusDate = leGetPreviousOccurrenceDate($db, (string) $dbCol, (string) $gId, $drawDate, $pb, true);
-        $bonusDrawsAgo = leGetDrawingsSinceDate($db, (string) $dbCol, (string) $gId, $prevBonusDate, $drawDate);
-
-        $drawHistoryRows[] = [
-            'label'    => $gameBonusLabel . ' (' . lePad2($pb) . ')',
-            'prevDate' => $prevBonusDate,
-            'drawsAgo' => $bonusDrawsAgo,
-            'isBonus'  => true,
         ];
     }
 }
@@ -797,13 +744,6 @@ $jsonLdString = json_encode($jsonLdData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED
   color:var(--deep-navy);
   border:1px solid rgba(10,26,51,.14);
   box-shadow:0 10px 20px rgba(10,26,51,.12), inset 0 1px 0 rgba(255,255,255,.90);
-}
-
-.skai-ball--bonus{
-  background:radial-gradient(circle at 50% 18%, #C73E4E 0%, #8F1F2D 76%, #4A0911 100%);
-  color:#fff;
-  border:1px solid rgba(255,255,255,.16);
-  box-shadow:0 12px 24px rgba(10,26,51,.18);
 }
 
 .skai-ball-gap{
@@ -1323,12 +1263,6 @@ table.skai-table tbody tr:hover{
   box-shadow:0 8px 16px rgba(10,26,51,.08);
 }
 
-.skai-pill--bonus{
-  background:radial-gradient(circle at 50% 18%, #C73E4E 0%, #8F1F2D 76%, #4A0911 100%);
-  color:#fff;
-  border:1px solid rgba(255,255,255,.14);
-}
-
 .skai-checkbox{
   transform:scale(1.25);
   cursor:pointer;
@@ -1407,12 +1341,6 @@ table.skai-table tbody tr:hover{
   background:linear-gradient(180deg, #FFFFFF 0%, #F3F6FF 100%);
   border:1px solid rgba(10,26,51,.14);
   color:var(--deep-navy);
-}
-
-.skai-chip--bonus{
-  background:radial-gradient(circle at 50% 18%, #C73E4E 0%, #8F1F2D 76%, #4A0911 100%);
-  color:#fff;
-  border:1px solid rgba(255,255,255,.14);
 }
 
 .skai-tool-grid{
@@ -1610,10 +1538,7 @@ table.skai-table tbody tr:hover{
             <?php if ($p3 !== '') : ?><span class="skai-ball skai-ball--main"><?php echo htmlspecialchars(lePad2($p3), ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?>
             <?php if ($p4 !== '') : ?><span class="skai-ball skai-ball--main"><?php echo htmlspecialchars(lePad2($p4), ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?>
             <?php if ($p5 !== '') : ?><span class="skai-ball skai-ball--main"><?php echo htmlspecialchars(lePad2($p5), ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?>
-            <?php if ($gameHasBonus && $pb !== '') : ?>
-              <span class="skai-ball-gap" aria-hidden="true"></span>
-              <span class="skai-ball skai-ball--bonus"><?php echo htmlspecialchars(lePad2($pb), ENT_QUOTES, 'UTF-8'); ?></span>
-            <?php endif; ?>
+            <?php if ($p6 !== '') : ?><span class="skai-ball skai-ball--main"><?php echo htmlspecialchars(lePad2($p6), ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?>
           </div>
 
           <div class="skai-hero-actions" aria-label="Primary actions">
@@ -1696,8 +1621,8 @@ table.skai-table tbody tr:hover{
     <article class="skai-stat">
       <div class="skai-stat-head skai-stat-head--ember">Window analyzed</div>
       <div class="skai-stat-body">
-        <div class="skai-stat-value"><?php echo (int) $nodCurrentMain; ?> / <?php echo (int) $nodCurrentBonus; ?></div>
-        <div class="skai-stat-note">Main-number and Bonus Ball draw windows currently loaded for this page view.</div>
+        <div class="skai-stat-value"><?php echo (int) $nodCurrentMain; ?> draws</div>
+        <div class="skai-stat-note">Analysis covers all six main ball positions in each draw within the selected window.</div>
       </div>
     </article>
   </section>
@@ -1715,7 +1640,7 @@ table.skai-table tbody tr:hover{
       <div>
         <h2 id="overview-title" class="skai-section-title">Overview</h2>
         <p class="skai-section-sub">
-          Start with a clear high-level view. This layer is designed for fast orientation: which numbers are most active, which are quiet, and how the current draw relates to recent history. Frequency is derived from the main number pool (01&ndash;49).
+          This section is designed for fast orientation: which numbers are most active, which are quiet, and how the current draw relates to recent history. Frequency is derived from all six drawn positions (01&ndash;49).
         </p>
       </div>
     </div>
@@ -1762,7 +1687,7 @@ table.skai-table tbody tr:hover{
       <div>
         <h2 id="recency-title" class="skai-section-title">Recency and draw context</h2>
         <p class="skai-section-sub">
-          This section makes the current draw easier to interpret. It shows how recently each latest number was previously seen and how the perspective shifts when you compare a short recent window with a broader historical one. Main balls are tracked separately from the Bonus Ball.
+          This section makes the current draw easier to interpret. It shows how recently each of the six drawn numbers was previously seen and how the perspective shifts when you compare a short recent window with a broader historical one.
         </p>
       </div>
     </div>
@@ -1828,7 +1753,7 @@ table.skai-table tbody tr:hover{
       <div>
         <h2 id="frequency-title" class="skai-section-title">Frequency deep dive</h2>
         <p class="skai-section-sub">
-          Move from summary to full reference. The first panel shows the complete main-number distribution across all values 01&ndash;49. The second panel shows the complete Bonus Ball distribution (sixth position only) across the same range for the selected window. Frequency here means raw count of appearances per number within the chosen draw window.
+          Move from summary to full reference. The first panel shows the complete distribution across all values 01&ndash;49 for all six drawn positions. The second panel shows recency — how many draws ago each number last appeared. Frequency here means raw count of appearances per number within the chosen draw window.
         </p>
       </div>
     </div>
@@ -1837,43 +1762,27 @@ table.skai-table tbody tr:hover{
       <div class="skai-two-col">
         <div class="skai-card">
           <div class="skai-card-head skai-card-head--horizon">
-            Full main-number distribution
-            <span class="skai-card-sub">All values 01&ndash;49 across the last <?php echo (int) $nodCurrentMain; ?> drawings</span>
+            Full number distribution
+            <span class="skai-card-sub">All values 01&ndash;49 across the last <?php echo (int) $nodCurrentMain; ?> drawings (all six positions)</span>
           </div>
           <div class="skai-card-body">
             <div class="skai-chart-shell">
               <div class="skai-chart-frame skai-chart-frame--tall">
-                <canvas id="fullMainChart" aria-label="Full main number distribution chart" role="img"></canvas>
+                <canvas id="fullMainChart" aria-label="Full number distribution chart" role="img"></canvas>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="skai-grid">
-          <div class="skai-card">
-            <div class="skai-card-head skai-card-head--radiant">
-              Full <?php echo htmlspecialchars($gameBonusLabel, ENT_QUOTES, 'UTF-8'); ?> distribution
-              <span class="skai-card-sub">Sixth position only, values 01&ndash;49 across the last <?php echo (int) $nodCurrentBonus; ?> drawings</span>
-            </div>
-            <div class="skai-card-body">
-              <div class="skai-chart-shell">
-                <div class="skai-chart-frame skai-chart-frame--medium">
-                  <canvas id="bonusChart" aria-label="Bonus Ball distribution chart" role="img"></canvas>
-                </div>
-              </div>
-            </div>
+        <div class="skai-card">
+          <div class="skai-card-head skai-card-head--ember">
+            Recency distribution
+            <span class="skai-card-sub">Distance since last appearance for each number (01&ndash;49)</span>
           </div>
-
-          <div class="skai-card">
-            <div class="skai-card-head skai-card-head--ember">
-              Recency distribution
-              <span class="skai-card-sub">Distance since last appearance for each main number</span>
-            </div>
-            <div class="skai-card-body">
-              <div class="skai-chart-shell">
-                <div class="skai-chart-frame">
-                  <canvas id="recencyChart" aria-label="Main numbers recency chart" role="img"></canvas>
-                </div>
+          <div class="skai-card-body">
+            <div class="skai-chart-shell">
+              <div class="skai-chart-frame skai-chart-frame--tall">
+                <canvas id="recencyChart" aria-label="Numbers recency chart" role="img"></canvas>
               </div>
             </div>
           </div>
@@ -1881,7 +1790,7 @@ table.skai-table tbody tr:hover{
       </div>
 
       <div class="skai-note">
-        The complete distribution is best used as a reference layer. The overview modules above are optimized for quick reading; this section is optimized for thorough review. Bonus Ball frequency reflects only the sixth drawn position and is tracked independently from the main number pool.
+        The complete distribution is best used as a reference layer. The overview modules above are optimized for quick reading; this section is optimized for thorough review. All six drawn positions contribute equally to the frequency and recency counts shown here.
       </div>
     </div>
   </section>
@@ -1900,7 +1809,7 @@ table.skai-table tbody tr:hover{
       <form name="fqsearch" method="post" action="/all-us-lotteries/results-analysis?st=<?php echo htmlspecialchars((string) $stateAbrev, ENT_QUOTES, 'UTF-8'); ?>&amp;stn=<?php echo htmlspecialchars((string) $stateName, ENT_QUOTES, 'UTF-8'); ?>&amp;gm=<?php echo htmlspecialchars((string) $gName, ENT_QUOTES, 'UTF-8'); ?>#tables">
         <div class="skai-controls-row">
           <div class="skai-controls-left">
-            <label for="nod">Main-number draw window</label>
+            <label for="nod">Draw window</label>
             <select name="nod" id="nod" class="skai-select">
               <?php foreach (range(10, 700, 5) as $opt) : ?>
                 <option value="<?php echo (int) $opt; ?>"<?php echo ((int) $opt === (int) $nodCurrentMain) ? ' selected="selected"' : ''; ?>>
@@ -1908,20 +1817,10 @@ table.skai-table tbody tr:hover{
                 </option>
               <?php endforeach; ?>
             </select>
-
-            <label for="pnod"><?php echo htmlspecialchars($gameBonusLabel, ENT_QUOTES, 'UTF-8'); ?> draw window</label>
-            <select name="pnod" id="pnod" class="skai-select">
-              <?php foreach (range(10, 700, 5) as $opt) : ?>
-                <option value="<?php echo (int) $opt; ?>"<?php echo ((int) $opt === (int) $nodCurrentBonus) ? ' selected="selected"' : ''; ?>>
-                  <?php echo (int) $opt; ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
           </div>
 
           <div class="skai-controls-right">
-            <button class="skai-button" name="fq-search" type="submit" value="1">Update analysis windows</button>
-            <input type="hidden" name="pfq-search" value="1">
+            <button class="skai-button" name="fq-search" type="submit" value="1">Update analysis window</button>
             <?php echo HTMLHelper::_('form.token'); ?>
           </div>
         </div>
@@ -1929,144 +1828,86 @@ table.skai-table tbody tr:hover{
     </div>
 
     <div class="skai-section-body">
-      <div class="skai-two-col">
+      <div class="skai-card">
+        <div class="skai-card-head skai-card-head--horizon">
+          Numbers table
+          <span class="skai-card-sub">Exact counts and recency for all values 01&ndash;49 (all six positions)</span>
+        </div>
 
-        <div class="skai-card">
-          <div class="skai-card-head skai-card-head--horizon">
-            Main numbers table
-            <span class="skai-card-sub">Exact counts and recency for values 01&ndash;49</span>
-          </div>
-
-          <div class="skai-controls">
-            <div class="skai-controls-row">
-              <div class="skai-controls-left">
-                <div class="skai-filter-group" data-filter-group="main">
-                  <button class="skai-filter is-active" type="button" data-filter="all">All</button>
-                  <button class="skai-filter" type="button" data-filter="active">Most active</button>
-                  <button class="skai-filter" type="button" data-filter="quiet">Quietest</button>
-                  <button class="skai-filter" type="button" data-filter="recent">Recently seen</button>
-                </div>
+        <div class="skai-controls">
+          <div class="skai-controls-row">
+            <div class="skai-controls-left">
+              <div class="skai-filter-group" data-filter-group="main">
+                <button class="skai-filter is-active" type="button" data-filter="all">All</button>
+                <button class="skai-filter" type="button" data-filter="active">Most active</button>
+                <button class="skai-filter" type="button" data-filter="quiet">Quietest</button>
+                <button class="skai-filter" type="button" data-filter="recent">Recently seen</button>
               </div>
-            </div>
-          </div>
-
-          <div class="skai-table-wrap">
-            <table id="skai-main-table" class="skai-table" aria-label="Main numbers frequency table">
-              <thead>
-                <tr>
-                  <th>Number</th>
-                  <th>Drawn Times</th>
-                  <th>Last Drawn</th>
-                  <th>Track</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php for ($i = $gameMainMin; $i <= $gameMainMax; $i++) : ?>
-                  <?php
-                  $number      = ($i < 10) ? '0' . $i : (string) $i;
-                  $countNumber = (int) ($mainCounts[$number] ?? 0);
-                  [$lastDrawSort, $lastDrawLabel] = leDrawingsAgoLabel($mainLastSeenIndex[$number] ?? null, (int) $nodCurrentMain);
-
-                  $rowClass = 'all';
-                  if (in_array($number, $topActiveKeys, true)) {
-                      $rowClass .= ' active';
-                  }
-                  if (in_array($number, $quietestKeys, true)) {
-                      $rowClass .= ' quiet';
-                  }
-                  if (($mainLastSeenIndex[$number] ?? null) !== null && (int) $mainLastSeenIndex[$number] <= 4) {
-                      $rowClass .= ' recent';
-                  }
-                  ?>
-                  <tr data-tags="<?php echo htmlspecialchars($rowClass, ENT_QUOTES, 'UTF-8'); ?>">
-                    <td><span class="skai-pill skai-pill--main"><?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?></span></td>
-                    <td><?php echo (int) $countNumber; ?> X</td>
-                    <td data-sort="<?php echo (int) $lastDrawSort; ?>"><?php echo htmlspecialchars($lastDrawLabel, ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td>
-                      <input
-                        class="skai-checkbox js-track-main"
-                        type="checkbox"
-                        value="<?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
-                        aria-label="Track main number <?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
-                      >
-                    </td>
-                  </tr>
-                <?php endfor; ?>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="skai-tracked">
-            <div class="skai-tracked-head">
-              <h3 class="skai-tracked-title">Tracked main numbers</h3>
-              <div class="skai-tracked-actions">
-                <button class="skai-link-btn" type="button" id="clearMainTracked">Clear all</button>
-              </div>
-            </div>
-            <div class="skai-chip-wrap" id="mainTrackedWrap">
-              <div class="skai-empty">Select numbers to create a short tracked set for comparison across this page.</div>
             </div>
           </div>
         </div>
 
-        <div class="skai-card">
-          <div class="skai-card-head skai-card-head--radiant">
-            <?php echo htmlspecialchars($gameBonusLabel, ENT_QUOTES, 'UTF-8'); ?> table
-            <span class="skai-card-sub">Exact counts and recency for values 01&ndash;49 (sixth position)</span>
-          </div>
+        <div class="skai-table-wrap">
+          <table id="skai-main-table" class="skai-table" aria-label="Numbers frequency table">
+            <thead>
+              <tr>
+                <th>Number</th>
+                <th>Drawn Times</th>
+                <th>Last Drawn</th>
+                <th>Track</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php for ($i = $gameMainMin; $i <= $gameMainMax; $i++) : ?>
+                <?php
+                $number      = ($i < 10) ? '0' . $i : (string) $i;
+                $countNumber = (int) ($mainCounts[$number] ?? 0);
+                [$lastDrawSort, $lastDrawLabel] = leDrawingsAgoLabel($mainLastSeenIndex[$number] ?? null, (int) $nodCurrentMain);
 
-          <div class="skai-table-wrap">
-            <table id="skai-bonus-table" class="skai-table" aria-label="Bonus Ball frequency table">
-              <thead>
-                <tr>
-                  <th>Number</th>
-                  <th>Drawn Times</th>
-                  <th>Last Drawn</th>
-                  <th>Track</th>
+                $rowClass = 'all';
+                if (in_array($number, $topActiveKeys, true)) {
+                    $rowClass .= ' active';
+                }
+                if (in_array($number, $quietestKeys, true)) {
+                    $rowClass .= ' quiet';
+                }
+                if (($mainLastSeenIndex[$number] ?? null) !== null && (int) $mainLastSeenIndex[$number] <= 4) {
+                    $rowClass .= ' recent';
+                }
+                ?>
+                <tr data-tags="<?php echo htmlspecialchars($rowClass, ENT_QUOTES, 'UTF-8'); ?>">
+                  <td><span class="skai-pill skai-pill--main"><?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?></span></td>
+                  <td><?php echo (int) $countNumber; ?> X</td>
+                  <td data-sort="<?php echo (int) $lastDrawSort; ?>"><?php echo htmlspecialchars($lastDrawLabel, ENT_QUOTES, 'UTF-8'); ?></td>
+                  <td>
+                    <input
+                      class="skai-checkbox js-track-main"
+                      type="checkbox"
+                      value="<?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
+                      aria-label="Track number <?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
+                    >
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                <?php for ($i = $gameBonusMin; $i <= $gameBonusMax; $i++) : ?>
-                  <?php
-                  $number      = ($i < 10) ? '0' . $i : (string) $i;
-                  $countNumber = (int) ($bonusCounts[$number] ?? 0);
-                  [$lastDrawSort, $lastDrawLabel] = leDrawingsAgoLabel($bonusLastSeenIndex[$number] ?? null, (int) $nodCurrentBonus);
-                  ?>
-                  <tr>
-                    <td><span class="skai-pill skai-pill--bonus"><?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?></span></td>
-                    <td><?php echo (int) $countNumber; ?> X</td>
-                    <td data-sort="<?php echo (int) $lastDrawSort; ?>"><?php echo htmlspecialchars($lastDrawLabel, ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td>
-                      <input
-                        class="skai-checkbox js-track-bonus"
-                        type="checkbox"
-                        value="<?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
-                        aria-label="Track <?php echo htmlspecialchars($gameBonusLabel, ENT_QUOTES, 'UTF-8'); ?> number <?php echo htmlspecialchars($number, ENT_QUOTES, 'UTF-8'); ?>"
-                      >
-                    </td>
-                  </tr>
-                <?php endfor; ?>
-              </tbody>
-            </table>
-          </div>
+              <?php endfor; ?>
+            </tbody>
+          </table>
+        </div>
 
-          <div class="skai-tracked">
-            <div class="skai-tracked-head">
-              <h3 class="skai-tracked-title">Tracked <?php echo htmlspecialchars($gameBonusLabel, ENT_QUOTES, 'UTF-8'); ?> values</h3>
-              <div class="skai-tracked-actions">
-                <button class="skai-link-btn" type="button" id="clearBonusTracked">Clear all</button>
-              </div>
-            </div>
-            <div class="skai-chip-wrap" id="bonusTrackedWrap">
-              <div class="skai-empty">Use tracking to keep a small working set visible while you compare modules.</div>
+        <div class="skai-tracked">
+          <div class="skai-tracked-head">
+            <h3 class="skai-tracked-title">Tracked numbers</h3>
+            <div class="skai-tracked-actions">
+              <button class="skai-link-btn" type="button" id="clearMainTracked">Clear all</button>
             </div>
           </div>
-
-          <div class="skai-note">
-            Tracking is local to this page view. It is intended as a lightweight comparison aid while you move between the overview, tables, and advanced SKAI tools.
+          <div class="skai-chip-wrap" id="mainTrackedWrap">
+            <div class="skai-empty">Select numbers to create a short tracked set for comparison across this page.</div>
           </div>
         </div>
 
+        <div class="skai-note">
+          Tracking is local to this page view. It is intended as a lightweight comparison aid while you move between the overview, tables, and advanced SKAI tools.
+        </div>
       </div>
     </div>
   </section>
@@ -2135,7 +1976,7 @@ table.skai-table tbody tr:hover{
 
     <div class="skai-section-body">
       <div class="skai-method-note">
-        <strong>Interpretation guidance:</strong> Frequency, recency, and spacing can provide useful context for reviewing draw history, but they should be treated as descriptive signals rather than guarantees. Main ball frequency is calculated from the first through fifth drawn positions. Bonus Ball frequency is calculated from the sixth drawn position independently. The purpose of this page is to make the recent behavior of the game easier to understand, compare, and carry into deeper SKAI analysis.
+        <strong>Interpretation guidance:</strong> Frequency, recency, and spacing can provide useful context for reviewing draw history, but they should be treated as descriptive signals rather than guarantees. All six drawn positions contribute equally to the frequency and recency counts on this page. The purpose of this page is to make the recent behavior of the game easier to understand, compare, and carry into deeper SKAI analysis.
       </div>
     </div>
   </section>
@@ -2159,9 +2000,7 @@ table.skai-table tbody tr:hover{
     quietValues: <?php echo json_encode(array_values($quietestValues)); ?>,
     mainLabels: <?php echo json_encode(array_values($mainChartLabels)); ?>,
     mainValues: <?php echo json_encode(array_values($mainChartValues)); ?>,
-    mainRecencyValues: <?php echo json_encode(array_values($mainRecencyValues)); ?>,
-    bonusLabels: <?php echo json_encode(array_values($bonusChartLabels)); ?>,
-    bonusValues: <?php echo json_encode(array_values($bonusChartValues)); ?>
+    mainRecencyValues: <?php echo json_encode(array_values($mainRecencyValues)); ?>
   };
 
   var chartsInitialized = false;
@@ -2261,7 +2100,6 @@ table.skai-table tbody tr:hover{
     var topActiveCanvas = safeCanvas('topActiveChart');
     var quietCanvas     = safeCanvas('quietChart');
     var fullMainCanvas  = safeCanvas('fullMainChart');
-    var bonusCanvas     = safeCanvas('bonusChart');
     var recencyCanvas   = safeCanvas('recencyChart');
 
     if (topActiveCanvas && chartData.topActiveLabels.length) {
@@ -2314,24 +2152,6 @@ table.skai-table tbody tr:hover{
       });
     }
 
-    if (bonusCanvas && chartData.bonusLabels.length) {
-      new Chart(bonusCanvas.getContext('2d'), {
-        type: 'bar',
-        data: {
-          labels:   chartData.bonusLabels,
-          datasets: [{
-            data:            chartData.bonusValues,
-            borderWidth:     0,
-            borderRadius:    6,
-            barThickness:    8,
-            maxBarThickness: 10,
-            backgroundColor: '#8F1F2D'
-          }]
-        },
-        options: commonBarOptions(true)
-      });
-    }
-
     if (recencyCanvas && chartData.mainLabels.length) {
       new Chart(recencyCanvas.getContext('2d'), {
         type: 'bar',
@@ -2377,10 +2197,8 @@ table.skai-table tbody tr:hover{
   }
 
   function bindTrackers() {
-    var mainWrap   = document.getElementById('mainTrackedWrap');
-    var bonusWrap  = document.getElementById('bonusTrackedWrap');
-    var clearMain  = document.getElementById('clearMainTracked');
-    var clearBonus = document.getElementById('clearBonusTracked');
+    var mainWrap  = document.getElementById('mainTrackedWrap');
+    var clearMain = document.getElementById('clearMainTracked');
 
     function renderTracked(selector, wrap, chipClass, emptyText) {
       if (!wrap) {
@@ -2428,8 +2246,7 @@ table.skai-table tbody tr:hover{
       renderTracked(selector, wrap, chipClass, emptyText);
     }
 
-    bindGroup('.js-track-main',  mainWrap,  'skai-chip--main',  'Select numbers to create a short tracked set for comparison across this page.');
-    bindGroup('.js-track-bonus', bonusWrap, 'skai-chip--bonus', 'Use tracking to keep a small working set visible while you compare modules.');
+    bindGroup('.js-track-main', mainWrap, 'skai-chip--main', 'Select numbers to create a short tracked set for comparison across this page.');
 
     if (clearMain) {
       clearMain.addEventListener('click', function () {
@@ -2438,16 +2255,6 @@ table.skai-table tbody tr:hover{
           inputs[i].checked = false;
         }
         renderTracked('.js-track-main', mainWrap, 'skai-chip--main', 'Select numbers to create a short tracked set for comparison across this page.');
-      });
-    }
-
-    if (clearBonus) {
-      clearBonus.addEventListener('click', function () {
-        var inputs = document.querySelectorAll('.js-track-bonus');
-        for (var i = 0; i < inputs.length; i++) {
-          inputs[i].checked = false;
-        }
-        renderTracked('.js-track-bonus', bonusWrap, 'skai-chip--bonus', 'Use tracking to keep a small working set visible while you compare modules.');
       });
     }
   }
